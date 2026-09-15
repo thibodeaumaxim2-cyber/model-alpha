@@ -1,0 +1,62 @@
+{
+  "greeting": {
+    "train": ["hello", "hi", "hey", "good morning", "good evening", "hello there", "hey there", "hi alpha", "hello alpha", "greetings"],
+    "test": ["good morning alpha", "hey alpha"],
+    "responses": ["Hi{name}! What would you like to talk about?", "Hello{name}! We can talk about learning AI, Python, or how I'm built."]
+  },
+  "goodbye": {
+    "train": ["bye", "goodbye", "see you", "see you later", "talk to you later", "good night", "bye alpha", "catch you later", "farewell", "have a good day"],
+    "test": ["goodbye alpha", "see you later alpha"],
+    "responses": ["Goodbye{name}! Thanks for chatting."]
+  },
+  "thanks": {
+    "train": ["thanks", "thank you", "thanks a lot", "thank you very much", "that was helpful", "appreciate it", "thanks alpha", "thank you for helping", "many thanks", "that helps"],
+    "test": ["thank you alpha", "that was very helpful"],
+    "responses": ["You're welcome{name}!", "Happy to help{name}."]
+  },
+  "identity": {
+    "train": ["who are you", "what is your name", "tell me about yourself", "are you a robot", "are you human", "introduce yourself", "what are you", "your name", "who is alpha", "are you an ai"],
+    "test": ["what is your name alpha", "tell me about yourself alpha"],
+    "responses": ["I'm Alpha, a small neural intent chatbot. I classify your message and select a written response. I can also remember your name during this session."]
+  },
+  "wellbeing": {
+    "train": ["how are you", "how are you doing", "how is it going", "are you doing well", "how do you feel", "how have you been", "how is your day", "are you okay", "how are things", "how is life"],
+    "test": ["how are you doing alpha", "how is your day going"],
+    "responses": ["I'm ready to chat! How is your day going? I don't have feelings, but I can respond to a few common moods."]
+  },
+  "happy": {
+    "train": ["i am happy", "i feel great", "i am doing well", "my day is good", "i feel happy", "i am excited", "today was amazing", "i am feeling good", "things are going well", "i had a great day"],
+    "test": ["i feel great today", "i am happy today"],
+    "responses": ["Glad to hear that{name}! Want to try learning something new about AI?"]
+  },
+  "sad": {
+    "train": ["i am sad", "i feel down", "i had a bad day", "i am feeling sad", "today was difficult", "i feel lonely", "i am upset", "i am stressed", "my day was bad", "i feel terrible"],
+    "test": ["i feel sad today", "i had a difficult day"],
+    "responses": ["Sorry today has been difficult{name}. I'm a limited chatbot, but we could switch to a light topic. Would you like a joke?"]
+  },
+  "capabilities": {
+    "train": ["what can you do", "help", "help me", "what can we talk about", "what do you know", "show your features", "what are your capabilities", "what topics do you support", "what should i ask", "show me some examples"],
+    "test": ["what can you do alpha", "help me with your features"],
+    "responses": ["Try: 'What is machine learning?', 'How do you learn?', 'What is Python?', or 'Tell me a joke'. Say 'My name is Sam' and then 'What is my name?' to try memory. /reset clears memory; /quit exits."]
+  },
+  "machine_learning": {
+    "train": ["what is machine learning", "explain machine learning", "what is ai", "explain artificial intelligence", "how does machine learning work", "teach me about ai", "what is artificial intelligence", "tell me about machine learning", "what are neural networks", "explain neural networks"],
+    "test": ["explain machine learning please", "tell me about neural networks"],
+    "responses": ["Machine learning uses examples to learn patterns. A neural network adjusts numerical weights to reduce prediction errors. In this project, example messages teach my network which conversation topic to choose."]
+  },
+  "training": {
+    "train": ["how do you learn", "how were you trained", "how can i train you", "how do i train this model", "can you learn new things", "how do i add new topics", "how do i teach you", "how does your training work", "how can i improve you", "can i change your responses"],
+    "test": ["how can i train you alpha", "how do i add topics"],
+    "responses": ["Edit intents.json to add example messages and responses, then run 'python alpha.py train'. My network learns from those examples. Chatting does not update my weights; your name is just session memory."]
+  },
+  "python": {
+    "train": ["what is python", "explain python", "how do i learn python", "teach me python", "why use python", "what language are you written in", "tell me about python", "is python good for ai", "how do i start coding", "how can i learn programming"],
+    "test": ["explain python please", "how do i start learning python"],
+    "responses": ["Python is the language used for this project. Start with variables, functions, lists, and dictionaries, then explore NumPy arrays. Alpha's network uses NumPy to calculate predictions and weight updates."]
+  },
+  "joke": {
+    "train": ["tell me a joke", "make me laugh", "say something funny", "do you know a joke", "tell a joke", "i want a joke", "another joke", "tell me something funny", "joke please", "can you tell me a joke"],
+    "test": ["tell me a funny joke", "a joke please alpha"],
+    "responses": ["Why did the programmer bring a ladder? To reach a higher level of abstraction.", "Why did the neural network bring a notebook? It kept losing its train of thought."]
+  }
+}

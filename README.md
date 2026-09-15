@@ -1,0 +1,41 @@
+# Model Alpha: PyTorch conversational neural network
+
+Alpha fine-tunes `microsoft/DialoGPT-small` with PyTorch and Hugging Face Transformers on the Hugging Face `daily_dialog` dataset. It generates replies and keeps recent conversation turns as context.
+
+## Install
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+## Train
+
+The first command downloads the pretrained model and dataset:
+
+```bash
+python conversational_model.py train --max-samples 5000
+```
+
+For a stronger experiment, use more examples and epochs:
+
+```bash
+python conversational_model.py train --max-samples 30000 --epochs 2
+```
+
+The checkpoint is saved under `checkpoints/alpha-dialogue/`. CPU training may take a while; CUDA is used automatically when available.
+
+## Chat
+
+```bash
+python conversational_model.py chat
+```
+
+Use `/reset` to clear context and `/quit` to exit. This is a real pretrained neural language model, so it can discuss topics outside fixed intents. It can still produce incorrect or repetitive replies, especially after a small fine-tuning run.
+
+## How it works
+
+Dialogue turns are formatted as alternating `User` and `Assistant` messages. The tokenizer converts them to token IDs. The transformer predicts the next token, and PyTorch updates its weights using cross-entropy loss, backpropagation, and AdamW. At chat time, `generate()` samples a response from the learned token distribution.
+
+`conversational_model.py` contains dataset loading, tokenization, training, checkpoint saving, history construction, and generation. The earlier `alpha.py` intent classifier remains as a simpler comparison.
