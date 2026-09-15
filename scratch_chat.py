@@ -83,7 +83,8 @@ def chat(a):
         history += ["<user>"]+words(message)+["<eos>","<assistant>"]; sequence=[lookup["<bos>"]]+[lookup.get(t,lookup["<unk>"]) for t in history]
         generated=[]
         for _ in range(a.max_new_tokens):
-            with torch.inference_mode(): logits=model(torch.tensor(sequence[-c["block_size"]:],dtype=torch.long)[None,:])[0,-1]/a.temperature
+            with torch.inference_mode(): logits=model(torch.tensor(sequence[-c["block_size"]:],dtype=torch.long)[None,:])[0,-1].clone()/a.temperature
+            logits = logits.clone()
             logits[lookup["<bos>"]]=-float("inf"); logits[lookup["<pad>"]]=-float("inf"); logits[lookup["<assistant>"]]=-float("inf")
             top_values, top_indices = torch.topk(logits, min(a.top_k, logits.numel())); filtered=torch.full_like(logits, -float("inf")); filtered[top_indices]=top_values; logits=filtered
             nxt=torch.multinomial(torch.softmax(logits,-1),1).item(); sequence.append(nxt); generated.append(nxt)
