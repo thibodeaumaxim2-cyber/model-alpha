@@ -39,3 +39,14 @@ Use `/reset` to clear context and `/quit` to exit. This is a real pretrained neu
 Dialogue turns are formatted as alternating `User` and `Assistant` messages. The tokenizer converts them to token IDs. The transformer predicts the next token, and PyTorch updates its weights using cross-entropy loss, backpropagation, and AdamW. At chat time, `generate()` samples a response from the learned token distribution.
 
 `conversational_model.py` contains dataset loading, tokenization, training, checkpoint saving, history construction, and generation. The earlier `alpha.py` intent classifier remains as a simpler comparison.
+
+## Our own model from random weights
+
+Use `scratch_chat.py` for a model whose tokenizer, vocabulary, Transformer architecture, and weights are created in this repository. It downloads only the Hugging Face `daily_dialog` dataset:
+
+```bash
+python scratch_chat.py train --max-samples 5000 --epochs 3
+python scratch_chat.py chat
+```
+
+This TinyGPT has four Transformer layers and starts with random weights. It learns next-token prediction with PyTorch. Increase `--max-samples` and `--epochs` for better results; expect rough conversation because this is a small model trained from scratch.
