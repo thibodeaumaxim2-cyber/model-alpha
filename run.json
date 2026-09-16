@@ -1,0 +1,18 @@
+{
+  "chat_samples": 20000,
+  "wikipedia_samples": 20000,
+  "code_file": null,
+  "vocab_size": 16000,
+  "block_size": 512,
+  "dim": 256,
+  "heads": 8,
+  "layers": 6,
+  "batch_size": 4,
+  "epochs": 3,
+  "learning_rate": 0.0003,
+  "validation_fraction": 0.05,
+  "log_every": 50,
+  "save_every": 500,
+  "seed": 42,
+  "resume": false
+}
