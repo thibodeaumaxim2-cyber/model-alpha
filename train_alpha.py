@@ -2,7 +2,6 @@
 import argparse
 import json
 import random
-from itertools import islice
 from pathlib import Path
 
 import torch
@@ -45,11 +44,13 @@ def dialogue_text(row):
 def source_texts(args):
     sources = []
     if args.chat_samples:
-        data = load_dataset("HuggingFaceH4/ultrachat_200k", split="train_sft", streaming=True)
-        sources += [("chat", dialogue_text(row)) for row in islice(data, args.chat_samples)]
+        data = load_dataset("HuggingFaceH4/ultrachat_200k", split="train_sft")
+        data = data.shuffle(seed=args.seed).select(range(min(args.chat_samples, len(data))))
+        sources += [("chat", dialogue_text(row)) for row in data]
     if args.wikipedia_samples:
-        data = load_dataset("wikimedia/wikipedia", "20231101.en", split="train", streaming=True)
-        sources += [("wikipedia", row["text"]) for row in islice(data, args.wikipedia_samples)]
+        data = load_dataset("wikimedia/wikipedia", "20231101.en", split="train")
+        data = data.shuffle(seed=args.seed + 1).select(range(min(args.wikipedia_samples, len(data))))
+        sources += [("wikipedia", row["text"]) for row in data]
     if args.code_file:
         lines = Path(args.code_file).read_text(errors="ignore").split("\n\n")
         sources += [("code", text) for text in lines if text.strip()]
