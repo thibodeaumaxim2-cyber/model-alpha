@@ -1,0 +1,12 @@
+{"id":"language-01","category":"language","prompt":"The sun rises in the", "target":" east."}
+{"id":"language-02","category":"language","prompt":"A book is made of many", "target":" pages."}
+{"id":"language-03","category":"language","prompt":"Water freezes at zero degrees", "target":" Celsius."}
+{"id":"knowledge-01","category":"knowledge","prompt":"The capital of France is", "target":" Paris."}
+{"id":"knowledge-02","category":"knowledge","prompt":"Albert Einstein developed the theory of", "target":" relativity."}
+{"id":"knowledge-03","category":"knowledge","prompt":"The largest planet in the Solar System is", "target":" Jupiter."}
+{"id":"code-01","category":"code","prompt":"def add(a, b):\n    return", "target":" a + b"}
+{"id":"code-02","category":"code","prompt":"for item in items:\n    print", "target":"(item)"}
+{"id":"code-03","category":"code","prompt":"def is_even(n):\n    return n % 2", "target":" == 0"}
+{"id":"conversation-01","category":"conversation","prompt":"user: Hello\nassistant:", "target":" Hello"}
+{"id":"conversation-02","category":"conversation","prompt":"user: Thank you for your help.\nassistant:", "target":" You are welcome"}
+{"id":"conversation-03","category":"conversation","prompt":"user: What is Python?\nassistant:", "target":" Python is"}

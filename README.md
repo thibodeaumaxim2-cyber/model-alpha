@@ -67,3 +67,13 @@ python train_alpha.py --code-file code_corpus.txt --resume
 ```
 
 Training state is kept in `checkpoints/alpha-v2/`. Resume an interrupted run with `--resume`; it restores model weights, optimizer state, mixed-precision scaler, training step, tokenizer, and settings.
+
+## Benchmark over time
+
+Run the stable Alpha Base benchmark after each training run:
+
+```bash
+python benchmark_alpha.py --checkpoint checkpoints/alpha-v2/latest.pt --name alpha-base-v1
+```
+
+It reports per-category next-token loss, perplexity, and exact completion rate for language, knowledge, code, and conversation examples. Keep `benchmarks/alpha_base_v1.jsonl` unchanged so reports from different checkpoints remain comparable.
