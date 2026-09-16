@@ -104,6 +104,8 @@ def train(args):
     train_data, valid_data = blocks[order[:cut]], blocks[order[cut:]]
     train_loader = DataLoader(TensorDataset(train_data), batch_size=args.batch_size, shuffle=True, drop_last=True)
     valid_loader = DataLoader(TensorDataset(valid_data), batch_size=args.batch_size)
+    print(f"packed_blocks={len(blocks):,} train_blocks={len(train_data):,} validation_blocks={len(valid_data):,}")
+    print(f"steps_per_epoch={len(train_loader):,} total_steps={len(train_loader) * args.epochs:,}")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu"); amp = device.type == "cuda"
     model = AlphaTransformer(tokenizer.get_vocab_size(), args.block_size, args.dim, args.heads, args.layers).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=.1)
