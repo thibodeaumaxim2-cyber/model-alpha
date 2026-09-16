@@ -50,3 +50,20 @@ python scratch_chat.py chat
 ```
 
 This TinyGPT has four Transformer layers and starts with random weights. It learns next-token prediction with PyTorch. Increase `--max-samples` and `--epochs` for better results; expect rough conversation because this is a small model trained from scratch.
+
+## Long-term training pipeline
+
+`train_alpha.py` is the scalable from-scratch trainer. It trains a BPE tokenizer, packs mixed data into fixed-size blocks, reserves validation data, uses CUDA mixed precision when available, and saves a full resumable checkpoint.
+
+```bash
+pip install -r requirements.txt
+python train_alpha.py --chat-samples 20000 --wikipedia-samples 5000
+```
+
+To add a local, license-reviewed code corpus whose files are separated by blank lines:
+
+```bash
+python train_alpha.py --code-file code_corpus.txt --resume
+```
+
+Training state is kept in `checkpoints/alpha-v2/`. Resume an interrupted run with `--resume`; it restores model weights, optimizer state, mixed-precision scaler, training step, tokenizer, and settings.
