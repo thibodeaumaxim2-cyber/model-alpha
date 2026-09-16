@@ -15,7 +15,8 @@ def generate(model, tokenizer, prompt, block_size, device, max_tokens, temperatu
     for _ in range(max_tokens):
         tokens = torch.tensor(ids[-block_size:], dtype=torch.long, device=device)[None]
         with torch.inference_mode():
-            logits = model(tokens)[0, -1].clone() / temperature
+            logits = model(tokens)[0, -1]
+        logits = logits.clone() / temperature
         logits[pad] = -float("inf")
         values, indices = torch.topk(logits, min(top_k, logits.numel()))
         filtered = torch.full_like(logits, -float("inf")); filtered[indices] = values
