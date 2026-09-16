@@ -77,3 +77,11 @@ python benchmark_alpha.py --checkpoint checkpoints/alpha-v2/latest.pt --name alp
 ```
 
 It reports per-category next-token loss, perplexity, and exact completion rate for language, knowledge, code, and conversation examples. Keep `benchmarks/alpha_base_v1.jsonl` unchanged so reports from different checkpoints remain comparable.
+
+## Chat with Alpha Base
+
+```bash
+python chat_alpha.py --checkpoint checkpoints/alpha-v2/latest.pt
+```
+
+Use `/reset` to clear the conversation context and `/quit` to exit. Alpha Base is a small pretraining model, so its first replies may be rough; conversation-focused training improves this later.
