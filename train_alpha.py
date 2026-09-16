@@ -6,7 +6,7 @@ from pathlib import Path
 
 import torch
 from datasets import load_dataset
-from tokenizers import Tokenizer, models, pre_tokenizers, trainers
+from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -66,6 +66,7 @@ def make_tokenizer(texts, args):
         return Tokenizer.from_file(str(path))
     tokenizer = Tokenizer(models.BPE(unk_token="<unk>"))
     tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tokenizer.decoder = decoders.ByteLevel()
     trainer = trainers.BpeTrainer(vocab_size=args.vocab_size, min_frequency=2, special_tokens=SPECIAL)
     tokenizer.train_from_iterator((text for _, text in texts), trainer=trainer)
     RUNS.mkdir(parents=True, exist_ok=True)

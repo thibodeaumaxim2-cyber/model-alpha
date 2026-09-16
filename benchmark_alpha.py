@@ -8,7 +8,7 @@ from pathlib import Path
 
 import torch
 from torch import nn
-from tokenizers import Tokenizer
+from tokenizers import Tokenizer, decoders
 
 from train_alpha import AlphaTransformer, RUNS
 
@@ -48,6 +48,7 @@ def main():
     saved = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     config = saved["config"]
     tokenizer = Tokenizer.from_file(str(args.checkpoint.parent / "tokenizer.json"))
+    tokenizer.decoder = decoders.ByteLevel()
     model = AlphaTransformer(tokenizer.get_vocab_size(), config["block_size"], config["dim"], config["heads"], config["layers"])
     model.load_state_dict(saved["model"]); model.eval()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu"); model.to(device)
