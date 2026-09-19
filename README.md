@@ -1,87 +1,37 @@
-# Model Alpha: PyTorch conversational neural network
+# Model Alpha
 
-Alpha fine-tunes `microsoft/DialoGPT-small` with PyTorch and Hugging Face Transformers on the Hugging Face `daily_dialog` dataset. It generates replies and keeps recent conversation turns as context.
+`train_alpha.py` provides an approximately 500M-parameter from-scratch causal LM profile: vocabulary 32,000, context 2,048, dimension 1,536, 16 layers, 24 heads, 4× FFN, and tied input/output embeddings. It enables CUDA bf16 autocast and TF32, uses fused AdamW, gradient accumulation, pinned-memory loading, validation, cosine decay with warmup, gradient clipping, resumable numbered checkpoints, and optional `torch.compile`.
+
+The default output is `checkpoints/alpha-500m/`; older checkpoint directories are preserved. `parameter_report.json` records the exact count and training refuses counts outside 480M–530M. The default effective batch is 32 (`micro-batch-size=1`, `grad-accum=32`). The default production data guard requires 300,000,000 source tokens.
 
 ## Install
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
+python -m pip install --upgrade pip
+# Install a CUDA-enabled PyTorch wheel matching the A100 from https://pytorch.org/
 python -m pip install -r requirements.txt
 ```
 
-## Train
+## One-step GPU smoke test
 
-The first command downloads the pretrained model and dataset:
-
-```bash
-python conversational_model.py train --max-samples 5000
-```
-
-For a stronger experiment, use more examples and epochs:
+This uses the tiny local corpus and the exact production architecture. It creates a parameter report and fails if the model cannot fit in GPU memory.
 
 ```bash
-python conversational_model.py train --max-samples 30000 --epochs 2
+python train_alpha.py --code-file smoke_data.txt --min-train-tokens 0 \
+  --epochs 1 --micro-batch-size 1 --grad-accum 1 --workers 0 \
+  --save-every 1 --log-every 1 --checkpoint-dir alpha-500m-smoke --smoke-test
 ```
 
-The checkpoint is saved under `checkpoints/alpha-dialogue/`. CPU training may take a while; CUDA is used automatically when available.
+## Production training
 
-## Chat
+Use a properly licensed, shuffled corpus containing at least several hundred million tokens; keep validation data separate. The trainer refuses to start below 300M tokens.
 
 ```bash
-python conversational_model.py chat
+python train_alpha.py --chat-samples 200000 --wikipedia-samples 100000 \
+  --micro-batch-size 1 --grad-accum 32 --epochs 1 --learning-rate 1e-4 \
+  --checkpoint-dir alpha-500m --workers 4 --compile
 ```
 
-Use `/reset` to clear context and `/quit` to exit. This is a real pretrained neural language model, so it can discuss topics outside fixed intents. It can still produce incorrect or repetitive replies, especially after a small fine-tuning run.
+For a local blank-line-separated corpus: `python train_alpha.py --code-file corpus.txt --checkpoint-dir alpha-500m`. Resume with `--resume`; it restores model, optimizer, scheduler, and step state.
 
-## How it works
-
-Dialogue turns are formatted as alternating `User` and `Assistant` messages. The tokenizer converts them to token IDs. The transformer predicts the next token, and PyTorch updates its weights using cross-entropy loss, backpropagation, and AdamW. At chat time, `generate()` samples a response from the learned token distribution.
-
-`conversational_model.py` contains dataset loading, tokenization, training, checkpoint saving, history construction, and generation. The earlier `alpha.py` intent classifier remains as a simpler comparison.
-
-## Our own model from random weights
-
-Use `scratch_chat.py` for a model whose tokenizer, vocabulary, Transformer architecture, and weights are created in this repository. It downloads only the Hugging Face `daily_dialog` dataset:
-
-```bash
-python scratch_chat.py train --max-samples 5000 --epochs 3
-python scratch_chat.py chat
-```
-
-This TinyGPT has four Transformer layers and starts with random weights. It learns next-token prediction with PyTorch. Increase `--max-samples` and `--epochs` for better results; expect rough conversation because this is a small model trained from scratch.
-
-## Long-term training pipeline
-
-`train_alpha.py` is the scalable from-scratch trainer. It trains a BPE tokenizer, packs mixed data into fixed-size blocks, reserves validation data, uses CUDA mixed precision when available, and saves a full resumable checkpoint.
-
-```bash
-pip install -r requirements.txt
-python train_alpha.py --chat-samples 20000 --wikipedia-samples 5000
-```
-
-To add a local, license-reviewed code corpus whose files are separated by blank lines:
-
-```bash
-python train_alpha.py --code-file code_corpus.txt --resume
-```
-
-Training state is kept in `checkpoints/alpha-v2/`. Resume an interrupted run with `--resume`; it restores model weights, optimizer state, mixed-precision scaler, training step, tokenizer, and settings.
-
-## Benchmark over time
-
-Run the stable Alpha Base benchmark after each training run:
-
-```bash
-python benchmark_alpha.py --checkpoint checkpoints/alpha-v2/latest.pt --name alpha-base-v1
-```
-
-It reports per-category next-token loss, perplexity, and exact completion rate for language, knowledge, code, and conversation examples. Keep `benchmarks/alpha_base_v1.jsonl` unchanged so reports from different checkpoints remain comparable.
-
-## Chat with Alpha Base
-
-```bash
-python chat_alpha.py --checkpoint checkpoints/alpha-v2/latest.pt
-```
-
-Use `/reset` to clear the conversation context and `/quit` to exit. Alpha Base is a small pretraining model, so its first replies may be rough; conversation-focused training improves this later.
