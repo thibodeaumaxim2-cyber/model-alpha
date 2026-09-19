@@ -50,7 +50,10 @@ def main():
     tokenizer = Tokenizer.from_file(str(args.checkpoint.parent / "tokenizer.json"))
     tokenizer.decoder = decoders.ByteLevel()
     model = AlphaTransformer(tokenizer.get_vocab_size(), config["block_size"], config["dim"], config["heads"], config["layers"])
-    model.load_state_dict(saved["model"]); model.eval()
+    state = saved["model"]
+    if any(key.startswith("_orig_mod.") for key in state):
+        state = {key.removeprefix("_orig_mod."): value for key, value in state.items()}
+    model.load_state_dict(state); model.eval()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu"); model.to(device)
     scores = defaultdict(list); exact = defaultdict(int)
     for item in load_suite(args.suite):
