@@ -1,0 +1,6 @@
+Alpha smoke test document. This repeated local corpus exercises causal attention, tied embeddings, validation, checkpointing, and the one-step training loop.
+
+Alpha smoke test document. This repeated local corpus exercises causal attention, tied embeddings, validation, checkpointing, and the one-step training loop.
+
+Alpha smoke test document. This repeated local corpus exercises causal attention, tied embeddings, validation, checkpointing, and the one-step training loop.
+
