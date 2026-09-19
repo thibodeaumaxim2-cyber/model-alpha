@@ -20,6 +20,8 @@ def report(model,cfg,path):
     n=sum(p.numel() for p in model.parameters()); r={"total_parameters":n,"trainable_parameters":sum(p.numel() for p in model.parameters() if p.requires_grad),"tied_embeddings":model.token.weight.data_ptr()==model.output.weight.data_ptr(),"config":cfg}; Path(path).write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2)); return n
 def dialogue(r): return "\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in r['messages'])
 def conversation(r):
+    if r.get('messages'):
+        return "\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in r['messages'])
     text=r.get('dialog',r.get('dialogue',r.get('text','')))
     return "\n".join(map(str,text)) if isinstance(text,list) else str(text)
 def sources(a):
@@ -29,7 +31,7 @@ def sources(a):
     if a.wikipedia_samples:
         d=load_dataset('wikimedia/wikipedia','20231101.en',split='train'); d=d.shuffle(seed=a.seed+1).select(range(min(a.wikipedia_samples,len(d)))); out += [('wikipedia',r['text']) for r in d]
     if a.conversation_samples:
-        d=load_dataset('daily_dialog',split='train'); d=d.shuffle(seed=a.seed+2).select(range(min(a.conversation_samples,len(d)))); out += [('conversation',conversation(r)) for r in d]
+        d=load_dataset('OpenAssistant/oasst1',split='train'); d=d.shuffle(seed=a.seed+2).select(range(min(a.conversation_samples,len(d)))); out += [('conversation',conversation(r)) for r in d]
     if a.code_file: out += [('code',x) for x in Path(a.code_file).read_text(errors='ignore').split('\n\n') if x.strip()]
     if not out: raise SystemExit('Choose at least one data source.')
     if a.smoke_test: out = out * 200
