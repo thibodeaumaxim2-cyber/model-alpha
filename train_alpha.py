@@ -1,136 +1,77 @@
-"""Scalable from-scratch Alpha trainer: BPE, packed data, validation, AMP, resume."""
-import argparse
-import json
-import random
+"""Scalable 500M Alpha trainer. See README for full-run and smoke-test commands."""
+import argparse, json, math, random
 from pathlib import Path
-
 import torch
 from datasets import load_dataset
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
-
-ROOT = Path(__file__).resolve().parent
-RUNS = ROOT / "checkpoints" / "alpha-v2"
-SPECIAL = ["<pad>", "<unk>", "<bos>", "<eos>"]
-
-
+ROOT=Path(__file__).resolve().parent; SPECIAL=["<pad>","<unk>","<bos>","<eos>"]
 class AlphaTransformer(nn.Module):
-    def __init__(self, vocab_size, block_size, dim, heads, layers, dropout=.1):
-        super().__init__()
-        self.token = nn.Embedding(vocab_size, dim)
-        self.position = nn.Embedding(block_size, dim)
-        block = nn.TransformerEncoderLayer(dim, heads, 4 * dim, dropout, batch_first=True, activation="gelu", norm_first=True)
-        self.blocks = nn.TransformerEncoder(block, layers)
-        self.norm = nn.LayerNorm(dim)
-        self.output = nn.Linear(dim, vocab_size, bias=False)
-        self.output.weight = self.token.weight
-        self.apply(self._init)
-    def _init(self, m):
-        if isinstance(m, (nn.Linear, nn.Embedding)):
-            nn.init.normal_(m.weight, 0, .02)
-            if getattr(m, "bias", None) is not None: nn.init.zeros_(m.bias)
-    def forward(self, tokens):
-        n = tokens.size(1)
-        hidden = self.token(tokens) + self.position(torch.arange(n, device=tokens.device))[None]
-        mask = torch.triu(torch.ones(n, n, dtype=torch.bool, device=tokens.device), diagonal=1)
-        return self.output(self.norm(self.blocks(hidden, mask=mask)))
-
-
-def dialogue_text(row):
-    return "\n".join(f"{m.get('role', 'user')}: {m.get('content', '')}" for m in row["messages"])
-
-
-def source_texts(args):
-    sources = []
-    if args.chat_samples:
-        data = load_dataset("HuggingFaceH4/ultrachat_200k", split="train_sft")
-        data = data.shuffle(seed=args.seed).select(range(min(args.chat_samples, len(data))))
-        sources += [("chat", dialogue_text(row)) for row in data]
-    if args.wikipedia_samples:
-        data = load_dataset("wikimedia/wikipedia", "20231101.en", split="train")
-        data = data.shuffle(seed=args.seed + 1).select(range(min(args.wikipedia_samples, len(data))))
-        sources += [("wikipedia", row["text"]) for row in data]
-    if args.code_file:
-        lines = Path(args.code_file).read_text(errors="ignore").split("\n\n")
-        sources += [("code", text) for text in lines if text.strip()]
-    if not sources:
-        raise SystemExit("Choose at least one data source.")
-    random.Random(args.seed).shuffle(sources)
-    return sources
-
-
-def make_tokenizer(texts, args):
-    path = RUNS / "tokenizer.json"
-    if path.exists() and args.resume:
-        return Tokenizer.from_file(str(path))
-    tokenizer = Tokenizer(models.BPE(unk_token="<unk>"))
-    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
-    tokenizer.decoder = decoders.ByteLevel()
-    trainer = trainers.BpeTrainer(vocab_size=args.vocab_size, min_frequency=2, special_tokens=SPECIAL)
-    tokenizer.train_from_iterator((text for _, text in texts), trainer=trainer)
-    RUNS.mkdir(parents=True, exist_ok=True)
-    tokenizer.save(str(path))
-    return tokenizer
-
-
-def pack(texts, tokenizer, block_size):
-    eos = tokenizer.token_to_id("<eos>")
-    stream = []
-    for _, text in texts:
-        stream.extend(tokenizer.encode(text).ids + [eos])
-    width = block_size + 1
-    return torch.tensor([stream[i:i + width] for i in range(0, len(stream) - width + 1, width)], dtype=torch.long)
-
-
-def checkpoint(path, model, optimizer, scaler, step, config):
-    torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(), "scaler": scaler.state_dict(), "step": step, "config": config}, path)
-
-
-def evaluate(model, loader, loss_fn, device, amp):
-    model.eval(); total = count = 0
-    with torch.inference_mode():
-        for (batch,) in loader:
-            x, y = batch[:, :-1].to(device), batch[:, 1:].to(device)
-            with torch.autocast(device_type=device.type, enabled=amp): loss = loss_fn(model(x).flatten(0, 1), y.flatten())
-            total += loss.item() * len(batch); count += len(batch)
-    model.train(); return total / max(1, count)
-
-
-def train(args):
-    random.seed(args.seed); torch.manual_seed(args.seed); RUNS.mkdir(parents=True, exist_ok=True)
-    texts = source_texts(args); tokenizer = make_tokenizer(texts, args); blocks = pack(texts, tokenizer, args.block_size)
-    if len(blocks) < 20: raise SystemExit("Not enough packed blocks; increase data samples.")
-    order = torch.randperm(len(blocks)); cut = max(1, int(len(blocks) * (1 - args.validation_fraction)))
-    train_data, valid_data = blocks[order[:cut]], blocks[order[cut:]]
-    train_loader = DataLoader(TensorDataset(train_data), batch_size=args.batch_size, shuffle=True, drop_last=True)
-    valid_loader = DataLoader(TensorDataset(valid_data), batch_size=args.batch_size)
-    print(f"packed_blocks={len(blocks):,} train_blocks={len(train_data):,} validation_blocks={len(valid_data):,}")
-    print(f"steps_per_epoch={len(train_loader):,} total_steps={len(train_loader) * args.epochs:,}")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu"); amp = device.type == "cuda"
-    model = AlphaTransformer(tokenizer.get_vocab_size(), args.block_size, args.dim, args.heads, args.layers).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=.1)
-    scaler = torch.amp.GradScaler("cuda", enabled=amp); loss_fn = nn.CrossEntropyLoss(); step = 0
-    latest = RUNS / "latest.pt"
-    if args.resume and latest.exists():
-        saved = torch.load(latest, map_location=device, weights_only=False); model.load_state_dict(saved["model"]); optimizer.load_state_dict(saved["optimizer"]); scaler.load_state_dict(saved["scaler"]); step = saved["step"]; print(f"Resumed at step {step}.")
-    config = vars(args).copy(); config.pop("func", None); (RUNS / "run.json").write_text(json.dumps(config, indent=2))
-    for epoch in range(args.epochs):
-        for (batch,) in train_loader:
-            x, y = batch[:, :-1].to(device), batch[:, 1:].to(device)
-            optimizer.zero_grad(set_to_none=True)
-            with torch.autocast(device_type=device.type, enabled=amp): loss = loss_fn(model(x).flatten(0, 1), y.flatten())
-            scaler.scale(loss).backward(); scaler.unscale_(optimizer); torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0); scaler.step(optimizer); scaler.update(); step += 1
-            if step % args.log_every == 0: print(f"step={step} train_loss={loss.item():.4f}")
-            if step % args.save_every == 0:
-                valid = evaluate(model, valid_loader, loss_fn, device, amp); print(f"step={step} validation_loss={valid:.4f}"); checkpoint(latest, model, optimizer, scaler, step, config)
-    valid = evaluate(model, valid_loader, loss_fn, device, amp); checkpoint(latest, model, optimizer, scaler, step, config); print(f"Finished: step={step}, validation_loss={valid:.4f}")
-
-
+    def __init__(self,vocab_size,block_size,dim,heads,layers):
+        super().__init__(); self.token=nn.Embedding(vocab_size,dim); self.position=nn.Embedding(block_size,dim); l=nn.TransformerEncoderLayer(dim,heads,4*dim,0,batch_first=True,activation="gelu",norm_first=True); self.blocks=nn.TransformerEncoder(l,layers); self.norm=nn.LayerNorm(dim); self.output=nn.Linear(dim,vocab_size,bias=False); self.output.weight=self.token.weight; self.apply(self._init)
+    def _init(self,m):
+        if isinstance(m,(nn.Linear,nn.Embedding)):
+            nn.init.normal_(m.weight,0,.02)
+            if getattr(m,'bias',None) is not None: nn.init.zeros_(m.bias)
+    def forward(self,t):
+        n=t.size(1); h=self.token(t)+self.position(torch.arange(n,device=t.device))[None]; mask=torch.triu(torch.ones(n,n,dtype=torch.bool,device=t.device),1); return self.output(self.norm(self.blocks(h,mask=mask)))
+def report(model,cfg,path):
+    n=sum(p.numel() for p in model.parameters()); r={"total_parameters":n,"trainable_parameters":sum(p.numel() for p in model.parameters() if p.requires_grad),"tied_embeddings":model.token.weight.data_ptr()==model.output.weight.data_ptr(),"config":cfg}; Path(path).write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2)); return n
+def dialogue(r): return "\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in r['messages'])
+def sources(a):
+    out=[]
+    if a.chat_samples:
+        d=load_dataset('HuggingFaceH4/ultrachat_200k',split='train_sft'); d=d.shuffle(seed=a.seed).select(range(min(a.chat_samples,len(d)))); out += [('chat',dialogue(r)) for r in d]
+    if a.wikipedia_samples:
+        d=load_dataset('wikimedia/wikipedia','20231101.en',split='train'); d=d.shuffle(seed=a.seed+1).select(range(min(a.wikipedia_samples,len(d)))); out += [('wikipedia',r['text']) for r in d]
+    if a.code_file: out += [('code',x) for x in Path(a.code_file).read_text(errors='ignore').split('\n\n') if x.strip()]
+    if not out: raise SystemExit('Choose at least one data source.')
+    if a.smoke_test: out = out * 200
+    random.Random(a.seed).shuffle(out); return out
+def tokenizer(texts,a,run):
+    p=run/'tokenizer.json'
+    if p.exists() and a.resume: return Tokenizer.from_file(str(p))
+    t=Tokenizer(models.BPE(unk_token='<unk>')); t.pre_tokenizer=pre_tokenizers.ByteLevel(add_prefix_space=False); t.decoder=decoders.ByteLevel(); t.train_from_iterator((x for _,x in texts),trainers.BpeTrainer(vocab_size=a.vocab_size,min_frequency=2,special_tokens=SPECIAL)); run.mkdir(parents=True,exist_ok=True); t.save(str(p)); return t
+def pack(texts,t,b):
+    eos=t.token_to_id('<eos>'); s=[]
+    for _,x in texts: s.extend(t.encode(x).ids+[eos])
+    w=b+1; return torch.tensor([s[i:i+w] for i in range(0,len(s)-w+1,w)],dtype=torch.long),len(s)
+def save(p,m,o,sch,step,epoch,cfg): torch.save({'model':m.state_dict(),'optimizer':o.state_dict(),'scheduler':sch.state_dict(),'step':step,'epoch':epoch,'config':cfg},p)
+@torch.no_grad()
+def evaluate(m,loader,loss,dev,amp):
+    m.eval(); total=count=0
+    for (b,) in loader:
+        x,y=b[:,:-1].to(dev,non_blocking=True),b[:,1:].to(dev,non_blocking=True)
+        with torch.autocast(device_type='cuda',dtype=torch.bfloat16,enabled=amp): z=loss(m(x).flatten(0,1),y.flatten())
+        total+=z.item()*len(b); count+=len(b)
+    m.train(); return total/max(1,count)
+def train(a):
+    if not torch.cuda.is_available() and not a.smoke_test: raise SystemExit('CUDA GPU required for the full run.')
+    if torch.cuda.is_available(): torch.backends.cuda.matmul.allow_tf32=True; torch.backends.cudnn.allow_tf32=True
+    random.seed(a.seed); torch.manual_seed(a.seed); run=ROOT/'checkpoints'/a.checkpoint_dir; run.mkdir(parents=True,exist_ok=True); txt=sources(a); tok=tokenizer(txt,a,run); blocks,tokens=pack(txt,tok,a.block_size)
+    if tokens<a.min_train_tokens: raise SystemExit(f'Only {tokens:,} tokens; need {a.min_train_tokens:,}. Use a several-hundred-million-token corpus or --smoke-test.')
+    if len(blocks)<2: raise SystemExit('Not enough packed blocks.')
+    order=torch.randperm(len(blocks),generator=torch.Generator().manual_seed(a.seed)); cut=max(1,int(len(blocks)*(1-a.validation_fraction))); tr,va=blocks[order[:cut]],blocks[order[cut:]]; kw=dict(num_workers=a.workers,pin_memory=torch.cuda.is_available(),persistent_workers=a.workers>0); tl=DataLoader(TensorDataset(tr),batch_size=a.micro_batch_size,shuffle=True,drop_last=True,**kw); vl=DataLoader(TensorDataset(va),batch_size=a.micro_batch_size,**kw)
+    dev=torch.device('cuda' if torch.cuda.is_available() else 'cpu'); amp=dev.type=='cuda'; cfg=vars(a).copy(); m=AlphaTransformer(a.vocab_size,a.block_size,a.dim,a.heads,a.layers).to(dev); n=report(m,cfg,run/'parameter_report.json')
+    if not 480_000_000<=n<=530_000_000: raise SystemExit(f'Parameter count {n:,} outside requested ~500M range.')
+    if a.compile and hasattr(torch,'compile'): m=torch.compile(m)
+    o=torch.optim.AdamW(m.parameters(),lr=a.learning_rate,weight_decay=.1,fused=dev.type=='cuda'); updates=max(1,math.ceil(len(tl)/a.grad_accum)*a.epochs); warm=max(1,int(updates*a.warmup_fraction)); sch=torch.optim.lr_scheduler.LambdaLR(o,lambda s:(s+1)/warm if s<warm else .5*(1+math.cos(math.pi*(s-warm)/max(1,updates-warm)))); step=epoch0=0; latest=run/'latest.pt'
+    if a.resume and latest.exists():
+        q=torch.load(latest,map_location=dev,weights_only=False); m.load_state_dict(q['model']); o.load_state_dict(q['optimizer']); sch.load_state_dict(q['scheduler']); step=q['step']; epoch0=q.get('epoch',0); print(f'Resumed at step {step}.')
+    (run/'run.json').write_text(json.dumps(cfg,indent=2)); print(f'tokens={tokens:,} train_blocks={len(tr):,} validation_blocks={len(va):,} effective_batch={a.micro_batch_size*a.grad_accum}'); loss=nn.CrossEntropyLoss(); o.zero_grad(set_to_none=True)
+    for epoch in range(epoch0,a.epochs):
+        for micro,(b,) in enumerate(tl):
+            x,y=b[:,:-1].to(dev,non_blocking=True),b[:,1:].to(dev,non_blocking=True)
+            with torch.autocast(device_type='cuda',dtype=torch.bfloat16,enabled=amp): z=loss(m(x).flatten(0,1),y.flatten())/a.grad_accum
+            z.backward()
+            if (micro+1)%a.grad_accum==0:
+                torch.nn.utils.clip_grad_norm_(m.parameters(),1.0); o.step(); sch.step(); o.zero_grad(set_to_none=True); step+=1
+                if step%a.log_every==0: print(f'step={step} train_loss={z.item()*a.grad_accum:.4f} lr={sch.get_last_lr()[0]:.3g}')
+                if step%a.save_every==0: print(f'step={step} validation_loss={evaluate(m,vl,loss,dev,amp):.4f}'); save(run/f'step-{step:07d}.pt',m,o,sch,step,epoch,cfg); save(latest,m,o,sch,step,epoch,cfg)
+        save(latest,m,o,sch,step,epoch+1,cfg)
+    print(f'Finished step={step}, validation_loss={evaluate(m,vl,loss,dev,amp):.4f}')
 def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--chat-samples", type=int, default=20000); p.add_argument("--wikipedia-samples", type=int, default=5000); p.add_argument("--code-file", help="Local UTF-8 source corpus; files are separated by blank lines.")
-    p.add_argument("--vocab-size", type=int, default=16000); p.add_argument("--block-size", type=int, default=512); p.add_argument("--dim", type=int, default=256); p.add_argument("--heads", type=int, default=8); p.add_argument("--layers", type=int, default=6); p.add_argument("--batch-size", type=int, default=4); p.add_argument("--epochs", type=int, default=3); p.add_argument("--learning-rate", type=float, default=3e-4); p.add_argument("--validation-fraction", type=float, default=.05); p.add_argument("--log-every", type=int, default=50); p.add_argument("--save-every", type=int, default=500); p.add_argument("--seed", type=int, default=42); p.add_argument("--resume", action="store_true")
-    train(p.parse_args())
+    p=argparse.ArgumentParser(); p.add_argument('--chat-samples',type=int,default=0); p.add_argument('--wikipedia-samples',type=int,default=0); p.add_argument('--code-file'); p.add_argument('--vocab-size',type=int,default=32000); p.add_argument('--block-size',type=int,default=2048); p.add_argument('--dim',type=int,default=1536); p.add_argument('--heads',type=int,default=24); p.add_argument('--layers',type=int,default=16); p.add_argument('--micro-batch-size',type=int,default=1); p.add_argument('--grad-accum',type=int,default=32); p.add_argument('--epochs',type=int,default=1); p.add_argument('--learning-rate',type=float,default=1e-4); p.add_argument('--warmup-fraction',type=float,default=.02); p.add_argument('--validation-fraction',type=float,default=.05); p.add_argument('--min-train-tokens',type=int,default=300_000_000); p.add_argument('--log-every',type=int,default=10); p.add_argument('--save-every',type=int,default=500); p.add_argument('--workers',type=int,default=2); p.add_argument('--checkpoint-dir',default='alpha-500m'); p.add_argument('--seed',type=int,default=42); p.add_argument('--resume',action='store_true'); p.add_argument('--compile',action='store_true'); p.add_argument('--smoke-test',action='store_true'); train(p.parse_args())
+if __name__=='__main__': main()
 
-if __name__ == "__main__": main()
