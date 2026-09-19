@@ -10,7 +10,7 @@ import torch
 from torch import nn
 from tokenizers import Tokenizer, decoders
 
-from train_alpha import AlphaTransformer, RUNS
+from train_alpha import AlphaTransformer
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_SUITE = ROOT / "benchmarks" / "alpha_base_v1.jsonl"
@@ -41,7 +41,7 @@ def sequence_nll(model, tokenizer, prompt, target, block_size, device):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", type=Path, default=RUNS / "latest.pt")
+    parser.add_argument("--checkpoint", type=Path, default=Path("checkpoints/alpha-25m/latest.pt"))
     parser.add_argument("--suite", type=Path, default=DEFAULT_SUITE)
     parser.add_argument("--name", help="Optional checkpoint label in the report")
     args = parser.parse_args()

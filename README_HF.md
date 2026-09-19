@@ -26,6 +26,34 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
+## Download the Trained Model
+
+The trained checkpoint is available on Hugging Face at
+[`MaxiMThi/FewHours`](https://huggingface.co/MaxiMThi/FewHours).
+
+Download it into the directory expected by the chat script:
+
+```bash
+python -m pip install -U huggingface_hub
+mkdir -p checkpoints/alpha-25m
+
+python - <<'PY'
+from huggingface_hub import snapshot_download
+
+snapshot_download(
+    repo_id="MaxiMThi/FewHours",
+    repo_type="model",
+    local_dir="checkpoints/alpha-25m",
+)
+PY
+```
+
+Check the downloaded files:
+
+```bash
+find checkpoints/alpha-25m -maxdepth 2 -type f
+```
+
 ## Training
 
 ```bash
@@ -72,6 +100,14 @@ When using `--resume`, keep the original values for `--vocab-size`, `--block-siz
 python chat_alpha.py \
   --checkpoint checkpoints/alpha-25m/latest.pt
 ```
+
+If the checkpoint has a different filename, locate it with:
+
+```bash
+find checkpoints/alpha-25m -type f \( -name "*.pt" -o -name "*.pth" \)
+```
+
+Then pass the discovered file to `--checkpoint`.
 
 Available chat commands:
 
