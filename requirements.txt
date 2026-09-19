@@ -3,3 +3,5 @@ transformers>=4.45
 datasets>=2.20
 accelerate>=0.34
 tokenizers>=0.20
+# TPU users: install the matching torch-xla wheel for the installed PyTorch version.
+# Example (TPU VM): pip install torch_xla[tpu] -f https://storage.googleapis.com/libtpu-releases/index.html

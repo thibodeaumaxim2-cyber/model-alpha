@@ -5,7 +5,7 @@ from pathlib import Path
 import torch
 from tokenizers import Tokenizer, decoders
 
-from train_alpha import AlphaTransformer, RUNS
+from train_alpha import AlphaTransformer
 
 
 def generate(model, tokenizer, prompt, block_size, device, max_tokens, temperature, top_k):
@@ -28,7 +28,7 @@ def generate(model, tokenizer, prompt, block_size, device, max_tokens, temperatu
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", type=Path, default=RUNS / "latest.pt")
+    parser.add_argument("--checkpoint", type=Path, default=Path("checkpoints/alpha-25m/latest.pt"))
     parser.add_argument("--max-turns", type=int, default=4)
     parser.add_argument("--max-new-tokens", type=int, default=100)
     parser.add_argument("--temperature", type=float, default=.75)
