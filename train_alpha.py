@@ -54,7 +54,8 @@ def train(a):
     if len(blocks)<2: raise SystemExit('Not enough packed blocks.')
     order=torch.randperm(len(blocks),generator=torch.Generator().manual_seed(a.seed)); cut=max(1,int(len(blocks)*(1-a.validation_fraction))); tr,va=blocks[order[:cut]],blocks[order[cut:]]; kw=dict(num_workers=a.workers,pin_memory=torch.cuda.is_available(),persistent_workers=a.workers>0); tl=DataLoader(TensorDataset(tr),batch_size=a.micro_batch_size,shuffle=True,drop_last=True,**kw); vl=DataLoader(TensorDataset(va),batch_size=a.micro_batch_size,**kw)
     dev=torch.device('cuda' if torch.cuda.is_available() else 'cpu'); amp=dev.type=='cuda'; cfg=vars(a).copy(); m=AlphaTransformer(a.vocab_size,a.block_size,a.dim,a.heads,a.layers).to(dev); n=report(m,cfg,run/'parameter_report.json')
-    if not 480_000_000<=n<=530_000_000: raise SystemExit(f'Parameter count {n:,} outside requested ~500M range.')
+    if a.checkpoint_dir == 'alpha-500m' and not 480_000_000<=n<=530_000_000:
+        raise SystemExit(f'Parameter count {n:,} outside requested ~500M range.')
     if a.compile and hasattr(torch,'compile'): m=torch.compile(m)
     o=torch.optim.AdamW(m.parameters(),lr=a.learning_rate,weight_decay=.1,fused=dev.type=='cuda'); updates=max(1,math.ceil(len(tl)/a.grad_accum)*a.epochs); warm=max(1,int(updates*a.warmup_fraction)); sch=torch.optim.lr_scheduler.LambdaLR(o,lambda s:(s+1)/warm if s<warm else .5*(1+math.cos(math.pi*(s-warm)/max(1,updates-warm)))); step=epoch0=0; latest=run/'latest.pt'
     if a.resume and latest.exists():
