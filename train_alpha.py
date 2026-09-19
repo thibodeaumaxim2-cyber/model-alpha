@@ -19,12 +19,17 @@ class AlphaTransformer(nn.Module):
 def report(model,cfg,path):
     n=sum(p.numel() for p in model.parameters()); r={"total_parameters":n,"trainable_parameters":sum(p.numel() for p in model.parameters() if p.requires_grad),"tied_embeddings":model.token.weight.data_ptr()==model.output.weight.data_ptr(),"config":cfg}; Path(path).write_text(json.dumps(r,indent=2)); print(json.dumps(r,indent=2)); return n
 def dialogue(r): return "\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in r['messages'])
+def conversation(r):
+    text=r.get('dialog',r.get('dialogue',r.get('text','')))
+    return "\n".join(map(str,text)) if isinstance(text,list) else str(text)
 def sources(a):
     out=[]
     if a.chat_samples:
         d=load_dataset('HuggingFaceH4/ultrachat_200k',split='train_sft'); d=d.shuffle(seed=a.seed).select(range(min(a.chat_samples,len(d)))); out += [('chat',dialogue(r)) for r in d]
     if a.wikipedia_samples:
         d=load_dataset('wikimedia/wikipedia','20231101.en',split='train'); d=d.shuffle(seed=a.seed+1).select(range(min(a.wikipedia_samples,len(d)))); out += [('wikipedia',r['text']) for r in d]
+    if a.conversation_samples:
+        d=load_dataset('daily_dialog',split='train'); d=d.shuffle(seed=a.seed+2).select(range(min(a.conversation_samples,len(d)))); out += [('conversation',conversation(r)) for r in d]
     if a.code_file: out += [('code',x) for x in Path(a.code_file).read_text(errors='ignore').split('\n\n') if x.strip()]
     if not out: raise SystemExit('Choose at least one data source.')
     if a.smoke_test: out = out * 200
@@ -73,6 +78,6 @@ def train(a):
         save(latest,m,o,sch,step,epoch+1,cfg)
     print(f'Finished step={step}, validation_loss={evaluate(m,vl,loss,dev,amp):.4f}')
 def main():
-    p=argparse.ArgumentParser(); p.add_argument('--chat-samples',type=int,default=0); p.add_argument('--wikipedia-samples',type=int,default=0); p.add_argument('--code-file'); p.add_argument('--vocab-size',type=int,default=32000); p.add_argument('--block-size',type=int,default=2048); p.add_argument('--dim',type=int,default=1536); p.add_argument('--heads',type=int,default=24); p.add_argument('--layers',type=int,default=16); p.add_argument('--micro-batch-size',type=int,default=1); p.add_argument('--grad-accum',type=int,default=32); p.add_argument('--epochs',type=int,default=1); p.add_argument('--learning-rate',type=float,default=1e-4); p.add_argument('--warmup-fraction',type=float,default=.02); p.add_argument('--validation-fraction',type=float,default=.05); p.add_argument('--min-train-tokens',type=int,default=300_000_000); p.add_argument('--log-every',type=int,default=10); p.add_argument('--save-every',type=int,default=500); p.add_argument('--workers',type=int,default=2); p.add_argument('--checkpoint-dir',default='alpha-500m'); p.add_argument('--seed',type=int,default=42); p.add_argument('--resume',action='store_true'); p.add_argument('--compile',action='store_true'); p.add_argument('--smoke-test',action='store_true'); train(p.parse_args())
+    p=argparse.ArgumentParser(); p.add_argument('--conversation-samples',type=int,default=0); p.add_argument('--chat-samples',type=int,default=0); p.add_argument('--wikipedia-samples',type=int,default=0); p.add_argument('--code-file'); p.add_argument('--vocab-size',type=int,default=32000); p.add_argument('--block-size',type=int,default=2048); p.add_argument('--dim',type=int,default=1536); p.add_argument('--heads',type=int,default=24); p.add_argument('--layers',type=int,default=16); p.add_argument('--micro-batch-size',type=int,default=1); p.add_argument('--grad-accum',type=int,default=32); p.add_argument('--epochs',type=int,default=1); p.add_argument('--learning-rate',type=float,default=1e-4); p.add_argument('--warmup-fraction',type=float,default=.02); p.add_argument('--validation-fraction',type=float,default=.05); p.add_argument('--min-train-tokens',type=int,default=300_000_000); p.add_argument('--log-every',type=int,default=10); p.add_argument('--save-every',type=int,default=500); p.add_argument('--workers',type=int,default=2); p.add_argument('--checkpoint-dir',default='alpha-500m'); p.add_argument('--seed',type=int,default=42); p.add_argument('--resume',action='store_true'); p.add_argument('--compile',action='store_true'); p.add_argument('--smoke-test',action='store_true'); train(p.parse_args())
 if __name__=='__main__': main()
 
