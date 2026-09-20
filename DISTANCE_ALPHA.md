@@ -38,3 +38,22 @@ parameter-matched baseline before scaling up or claiming an improvement.
 ```bash
 python -m unittest test_distance_alpha
 ```
+
+## Benchmarking
+
+Score a checkpoint against the held-out 5% suffix of the same corpus used for
+training. The report contains cross-entropy loss, perplexity, effective memory
+matches, total validation tokens, parameter count, and measured tokens per second.
+Use the same corpus and `--max-blocks` setting when comparing runs.
+
+```bash
+python benchmark_distance_alpha.py \
+  --checkpoint checkpoints/alpha-distance/latest.pt \
+  --corpus code_corpus.txt \
+  --max-blocks 100
+```
+
+The default report is `benchmark.json` beside the checkpoint. It is a checkpoint
+benchmark, not a quality comparison with the original Alpha architecture. A fair
+baseline must use the same tokenizer, corpus split, number of parameters, and
+validation blocks.
