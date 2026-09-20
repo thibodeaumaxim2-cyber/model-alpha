@@ -149,6 +149,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--chunk-tokens", type=int, default=1_000_000)
     parser.add_argument("--cache-chunks", type=int, default=4)
+    parser.add_argument("--memory-loss-scale", type=float, default=.05,
+                        help="Weight for the effective-memory-match objective.")
     parser.add_argument("--save-every", type=int, default=100)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
@@ -158,6 +160,8 @@ def main():
         if value is not None: architecture[key] = value
     if min(args.steps, args.batch_size, args.save_every, args.chunk_tokens, args.cache_chunks, args.tokenizer_samples) < 1:
         parser.error("Numeric arguments must be positive")
+    if args.memory_loss_scale < 0:
+        parser.error("--memory-loss-scale must be non-negative")
     if args.hf_dataset and args.hf_samples < 1:
         parser.error("--hf-samples must be positive")
     if architecture["dim"] % architecture["heads"]:
@@ -214,12 +218,12 @@ def main():
         with torch.autocast(device.type, dtype=dtype, enabled=device.type == "cuda"):
             logits, auxiliary, effective = model(x)
             ce = F.cross_entropy(logits.flatten(0, 1), y.flatten())
-            loss = ce + .001 * auxiliary
+            loss = ce + args.memory_loss_scale * auxiliary
         scaler.scale(loss).backward(); scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
         scaler.step(optimizer); scaler.update()
         if step % 10 == 0:
-            print(f"step={step} loss={ce.item():.4f} effective_matches={effective.item():.2f}", flush=True)
+            print(f"step={step} loss={ce.item():.4f} memory_auxiliary={auxiliary.item():.4f} effective_matches={effective.item():.2f}", flush=True)
         if step % args.save_every == 0 or step == start + args.steps:
             model.eval()
             with torch.inference_mode():

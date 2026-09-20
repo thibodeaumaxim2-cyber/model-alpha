@@ -91,3 +91,10 @@ selected text.
 This single-process trainer is an experiment harness. Training a 1B model needs
 substantially more than a few hundred thousand conversations and usually needs
 high-memory or multi-GPU hardware; it will not fit a 6GB GPU.
+
+The model uses a GPT-style normal weight initialization (standard deviation .02).
+An initial loss near the logarithm of the vocabulary size is expected; a very high
+initial loss such as 100 indicates an unsuitable checkpoint or a broken run. The
+default memory objective scale is .05, which pushes effective memory matches toward
+eight. Check the `effective_matches` log: around 8 is the intended behavior, while
+near 1 means one entry dominates and near 4,096 means retrieval is uniform.

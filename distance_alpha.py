@@ -62,6 +62,20 @@ class DistanceAlpha(nn.Module):
         self.norm = nn.LayerNorm(dim)
         self.output = nn.Linear(dim, vocab_size, bias=False)
         self.output.weight = self.token.weight
+        self.apply(self._init)
+        # A roughly 0.058 initial radius produces useful variation among random
+        # normalized memory keys while allowing the learned target to refine it.
+        nn.init.zeros_(self.memory.radius.weight)
+        nn.init.constant_(self.memory.radius.bias, -3.5)
+        nn.init.zeros_(self.memory.gate.weight)
+        nn.init.constant_(self.memory.gate.bias, -2.)
+
+    @staticmethod
+    def _init(module):
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            nn.init.normal_(module.weight, mean=0., std=.02)
+            if getattr(module, "bias", None) is not None:
+                nn.init.zeros_(module.bias)
 
     def forward(self, tokens):
         n = tokens.shape[1]
