@@ -15,8 +15,11 @@ from distance_alpha import DistanceAlpha
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--corpus", type=Path, required=True,
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--corpus", type=Path,
                         help="The same corpus used during training.")
+    source.add_argument("--chunk-dir", type=Path,
+                        help="Validation chunk directory from the chunked trainer.")
     parser.add_argument("--max-blocks", type=int, default=100,
                         help="Number of non-overlapping validation blocks to score.")
     parser.add_argument("--batch-size", type=int, default=1)
@@ -33,14 +36,31 @@ def main():
     tokenizer_path = args.checkpoint.parent / "tokenizer.json"
     if not tokenizer_path.is_file():
         parser.error(f"Tokenizer missing beside checkpoint: {tokenizer_path}")
-    tokenizer = Tokenizer.from_file(str(tokenizer_path))
-    raw = args.corpus.read_text(encoding="utf-8")
-    validation_ids = torch.tensor(tokenizer.encode(raw[int(len(raw) * .95):]).ids)
     width = config["block_size"] + 1
-    available = (len(validation_ids) - width + 1) // width
-    blocks = min(args.max_blocks, available)
-    if blocks < 1:
-        parser.error("Validation suffix is shorter than one model block")
+    tokenizer = Tokenizer.from_file(str(tokenizer_path))
+    block_tensors = []
+    if args.corpus:
+        raw = args.corpus.read_text(encoding="utf-8")
+        validation_ids = torch.tensor(tokenizer.encode(raw[int(len(raw) * .95):]).ids)
+        for offset in range(0, len(validation_ids) - width + 1, width):
+            block_tensors.append(validation_ids[offset:offset + width])
+            if len(block_tensors) == args.max_blocks:
+                break
+        source_description = str(args.corpus)
+    else:
+        if not args.chunk_dir.is_dir():
+            parser.error(f"Validation chunk directory does not exist: {args.chunk_dir}")
+        for path in sorted(args.chunk_dir.glob("*.pt")):
+            tokens = torch.load(path, map_location="cpu")
+            for offset in range(0, tokens.numel() - width + 1, width):
+                block_tensors.append(tokens[offset:offset + width])
+                if len(block_tensors) == args.max_blocks:
+                    break
+            if len(block_tensors) == args.max_blocks:
+                break
+        source_description = str(args.chunk_dir)
+    if not block_tensors:
+        parser.error("Validation data is shorter than one model block")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     bf16 = device.type == "cuda" and torch.cuda.is_bf16_supported()
@@ -56,12 +76,8 @@ def main():
         torch.cuda.synchronize()
     started = time.perf_counter()
     with torch.inference_mode():
-        for start_block in range(0, blocks, args.batch_size):
-            batch_blocks = []
-            for block in range(start_block, min(start_block + args.batch_size, blocks)):
-                offset = block * width
-                batch_blocks.append(validation_ids[offset:offset + width])
-            batch = torch.stack(batch_blocks).to(device)
+        for start_block in range(0, len(block_tensors), args.batch_size):
+            batch = torch.stack(block_tensors[start_block:start_block + args.batch_size]).long().to(device)
             x, y = batch[:, :-1], batch[:, 1:]
             with torch.autocast(device.type, dtype=dtype, enabled=device.type == "cuda"):
                 logits, _, effective = model(x)
@@ -76,10 +92,11 @@ def main():
     report = {
         "checkpoint": str(args.checkpoint),
         "checkpoint_step": saved.get("step"),
+        "validation_source": source_description,
         "device": str(device),
         "parameters": model_parameters,
         "validation_tokens": int(total_tokens),
-        "validation_blocks": blocks,
+        "validation_blocks": len(block_tensors),
         "cross_entropy_loss": loss,
         "perplexity": math.exp(min(loss, 80)),
         "mean_effective_memory_matches": sum(effective_matches) / len(effective_matches),

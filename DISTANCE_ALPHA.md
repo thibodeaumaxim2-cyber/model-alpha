@@ -53,6 +53,16 @@ python benchmark_distance_alpha.py \
   --max-blocks 100
 ```
 
+For Hugging Face runs prepared by the chunked trainer, benchmark the persisted
+validation chunks directly instead of loading a corpus into RAM:
+
+```bash
+python benchmark_distance_alpha.py \
+  --checkpoint checkpoints/alpha-distance-1b/latest.pt \
+  --chunk-dir checkpoints/alpha-distance-1b/token-chunks/validation \
+  --max-blocks 100
+```
+
 The default report is `benchmark.json` beside the checkpoint. It is a checkpoint
 benchmark, not a quality comparison with the original Alpha architecture. A fair
 baseline must use the same tokenizer, corpus split, number of parameters, and
