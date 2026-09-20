@@ -1,12 +1,17 @@
-"""Local UTF-8 corpus experiment; separate checkpoints from existing Alpha models."""
+"""Train DistanceAlpha from RAM-bounded token chunks stored on disk."""
 import argparse
+from collections import OrderedDict
+import itertools
 import json
 import os
 from pathlib import Path
+import random
+
 import torch
-from torch.nn import functional as F
 from datasets import load_dataset
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
+from torch.nn import functional as F
+
 from distance_alpha import DistanceAlpha
 
 
@@ -14,12 +19,13 @@ PRESETS = {
     "small": dict(block_size=256, dim=256, heads=8, layers=4, clusters=64, slots=64),
     "1b": dict(block_size=2048, dim=2048, heads=16, layers=18, clusters=64, slots=64),
 }
+SPECIAL = ["<pad>", "<unk>", "<bos>", "<eos>"]
 
 
 def dataset_text(row):
     messages = row.get("messages")
     if isinstance(messages, list):
-        return "\n".join(f"{message.get('role', 'user')}: {message.get('content', '')}" for message in messages)
+        return "\n".join(f"{item.get('role', 'user')}: {item.get('content', '')}" for item in messages)
     for field in ("text", "content", "prompt", "conversation"):
         value = row.get(field)
         if isinstance(value, str):
@@ -27,113 +33,185 @@ def dataset_text(row):
     return json.dumps(row, ensure_ascii=False)
 
 
+def corpus_documents(path):
+    lines = []
+    with path.open(encoding="utf-8") as source:
+        for line in source:
+            if line.strip():
+                lines.append(line.rstrip("\n"))
+            elif lines:
+                yield "\n".join(lines)
+                lines = []
+    if lines:
+        yield "\n".join(lines)
+
+
+def hf_documents(args):
+    dataset = load_dataset(args.hf_dataset, args.hf_config, split=args.hf_split, streaming=True)
+    dataset = dataset.shuffle(seed=42, buffer_size=10_000)
+    for row in itertools.islice(dataset, args.hf_samples):
+        text = dataset_text(row)
+        if text.strip():
+            yield text
+
+
 def parameter_count(config):
     d, v, b, layers = config["dim"], config["vocab_size"], config["block_size"], config["layers"]
     clusters, slots = config["clusters"], config["slots"]
-    transformer = layers * (12 * d * d + 13 * d)
-    memory = clusters * d * (1 + 2 * slots) + d * d + 2 * d + 2
-    return v * d + b * d + transformer + memory + 2 * d
+    return v*d + b*d + layers*(12*d*d + 13*d) + clusters*d*(1 + 2*slots) + d*d + 4*d + 2
+
+
+def save_chunk(directory, number, token_ids):
+    path = directory / f"{number:06d}.pt"
+    temp = path.with_suffix(".tmp")
+    torch.save(torch.tensor(token_ids, dtype=torch.int32), temp)
+    os.replace(temp, path)
+
+
+def build_chunks(args, out, tokenizer):
+    chunk_root = out / "token-chunks"
+    manifest_path = chunk_root / "manifest.json"
+    if manifest_path.exists():
+        return json.loads(manifest_path.read_text())
+    if chunk_root.exists() and any(chunk_root.iterdir()):
+        raise SystemExit(f"Incomplete token chunk directory: {chunk_root}. Move it aside before retrying.")
+    train_dir, valid_dir = chunk_root / "train", chunk_root / "validation"
+    train_dir.mkdir(parents=True); valid_dir.mkdir(parents=True)
+    documents = hf_documents(args) if args.hf_dataset else corpus_documents(args.corpus)
+    eos = tokenizer.token_to_id("<eos>")
+    buffers = {"train": [], "validation": []}
+    directories = {"train": train_dir, "validation": valid_dir}
+    counts = {"train": 0, "validation": 0}
+    numbers = {"train": 0, "validation": 0}
+    for index, document in enumerate(documents):
+        split = "validation" if index % 20 == 0 else "train"
+        buffers[split].extend(tokenizer.encode(document).ids + [eos])
+        while len(buffers[split]) >= args.chunk_tokens:
+            save_chunk(directories[split], numbers[split], buffers[split][:args.chunk_tokens])
+            counts[split] += args.chunk_tokens; numbers[split] += 1
+            buffers[split] = buffers[split][args.chunk_tokens:]
+    for split in buffers:
+        if buffers[split]:
+            save_chunk(directories[split], numbers[split], buffers[split])
+            counts[split] += len(buffers[split]); numbers[split] += 1
+    manifest = {"train_tokens": counts["train"], "validation_tokens": counts["validation"],
+                "train_chunks": numbers["train"], "validation_chunks": numbers["validation"],
+                "chunk_tokens": args.chunk_tokens}
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    return manifest
+
+
+class DiskBlockSampler:
+    def __init__(self, directory, block_size, cache_chunks, seed):
+        self.files = sorted(directory.glob("*.pt"))
+        self.files = [path for path in self.files if torch.load(path, map_location="cpu").numel() > block_size]
+        if not self.files:
+            raise SystemExit(f"No {block_size + 1}-token blocks in {directory}")
+        self.block_size = block_size
+        self.cache_chunks = cache_chunks
+        self.cache = OrderedDict()
+        self.random = random.Random(seed)
+
+    def load(self, path):
+        if path not in self.cache:
+            self.cache[path] = torch.load(path, map_location="cpu")
+            while len(self.cache) > self.cache_chunks:
+                self.cache.popitem(last=False)
+        self.cache.move_to_end(path)
+        return self.cache[path]
+
+    def batch(self, batch_size, device):
+        sequences = []
+        for _ in range(batch_size):
+            data = self.load(self.random.choice(self.files))
+            start = self.random.randrange(data.numel() - self.block_size)
+            sequences.append(data[start:start + self.block_size + 1])
+        tokens = torch.stack(sequences).long().to(device, non_blocking=device.type == "cuda")
+        return tokens[:, :-1], tokens[:, 1:]
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    source = p.add_mutually_exclusive_group(required=True)
-    source.add_argument('--corpus', type=Path)
-    source.add_argument('--hf-dataset', help='Hugging Face dataset ID; streamed to a persistent corpus file.')
-    p.add_argument('--hf-config')
-    p.add_argument('--hf-split', default='train')
-    p.add_argument('--hf-samples', type=int, default=100000)
-    p.add_argument('--tokenizer', type=Path, help='Optional existing BPE tokenizer. A new one is trained when omitted.')
-    p.add_argument('--output', default='checkpoints/alpha-distance')
-    p.add_argument('--steps', type=int, default=1000, help='Additional optimizer steps')
-    p.add_argument('--preset', choices=PRESETS, default='small')
-    p.add_argument('--block-size', type=int)
-    p.add_argument('--dim', type=int)
-    p.add_argument('--heads', type=int)
-    p.add_argument('--layers', type=int)
-    p.add_argument('--clusters', type=int)
-    p.add_argument('--slots', type=int)
-    p.add_argument('--vocab-size', type=int, default=32000)
-    p.add_argument('--batch-size', type=int, default=1)
-    p.add_argument('--save-every', type=int, default=100)
-    p.add_argument('--resume', action='store_true')
-    a = p.parse_args()
-    architecture = PRESETS[a.preset].copy()
+    parser = argparse.ArgumentParser(description=__doc__)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--corpus", type=Path)
+    source.add_argument("--hf-dataset", help="Hugging Face dataset ID; tokenized in disk-backed chunks.")
+    parser.add_argument("--hf-config")
+    parser.add_argument("--hf-split", default="train")
+    parser.add_argument("--hf-samples", type=int, default=100000)
+    parser.add_argument("--tokenizer", type=Path, help="Optional existing BPE tokenizer.")
+    parser.add_argument("--tokenizer-samples", type=int, default=10_000)
+    parser.add_argument("--output", type=Path, default=Path("checkpoints/alpha-distance"))
+    parser.add_argument("--steps", type=int, default=1000)
+    parser.add_argument("--preset", choices=PRESETS, default="small")
+    for name in ("block_size", "dim", "heads", "layers", "clusters", "slots"):
+        parser.add_argument("--" + name.replace("_", "-"), type=int)
+    parser.add_argument("--vocab-size", type=int, default=32000)
+    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--chunk-tokens", type=int, default=1_000_000)
+    parser.add_argument("--cache-chunks", type=int, default=4)
+    parser.add_argument("--save-every", type=int, default=100)
+    parser.add_argument("--resume", action="store_true")
+    args = parser.parse_args()
+    architecture = PRESETS[args.preset].copy()
     for key in ("block_size", "dim", "heads", "layers", "clusters", "slots"):
-        value = getattr(a, key)
-        if value is not None:
-            architecture[key] = value
-    if min(a.steps, architecture["block_size"], a.batch_size, a.save_every, a.hf_samples) < 1:
-        p.error('Numeric arguments must be positive')
+        value = getattr(args, key)
+        if value is not None: architecture[key] = value
+    if min(args.steps, args.batch_size, args.save_every, args.chunk_tokens, args.cache_chunks, args.tokenizer_samples) < 1:
+        parser.error("Numeric arguments must be positive")
+    if args.hf_dataset and args.hf_samples < 1:
+        parser.error("--hf-samples must be positive")
     if architecture["dim"] % architecture["heads"]:
-        p.error('--dim must be divisible by --heads')
-    torch.manual_seed(42)
-    out = Path(a.output); out.mkdir(parents=True, exist_ok=True)
-    checkpoint = out / 'latest.pt'
-    if checkpoint.exists() and not a.resume:
-        raise SystemExit('Checkpoint exists: use --resume or a new --output.')
-    if a.resume and not checkpoint.exists():
-        raise SystemExit('Resume requested but checkpoint is missing.')
-    corpus_path = a.corpus
-    if a.hf_dataset:
-        corpus_path = out / 'hf-corpus.txt'
-        if not corpus_path.exists():
-            dataset = load_dataset(a.hf_dataset, a.hf_config, split=a.hf_split, streaming=True)
-            dataset = dataset.shuffle(seed=42, buffer_size=10_000)
-            with corpus_path.open('x', encoding='utf-8') as corpus:
-                for row in dataset.take(a.hf_samples):
-                    text = dataset_text(row)
-                    if text.strip():
-                        corpus.write(text + '\n\n')
-    raw = corpus_path.read_text(encoding='utf-8')
-    cut = int(len(raw)*.95)
-    tokenizer_path = out / 'tokenizer.json'
-    if a.resume:
+        parser.error("--dim must be divisible by --heads")
+
+    out = args.output; out.mkdir(parents=True, exist_ok=True)
+    checkpoint, tokenizer_path = out / "latest.pt", out / "tokenizer.json"
+    if checkpoint.exists() and not args.resume:
+        raise SystemExit("Checkpoint exists: use --resume or a new --output.")
+    if args.resume and not checkpoint.exists():
+        raise SystemExit("Resume requested but checkpoint is missing.")
+    if args.resume:
         tokenizer = Tokenizer.from_file(str(tokenizer_path))
-    elif a.tokenizer:
-        tokenizer = Tokenizer.from_file(str(a.tokenizer))
+    elif args.tokenizer:
+        tokenizer = Tokenizer.from_file(str(args.tokenizer))
     else:
-        tokenizer = Tokenizer(models.BPE(unk_token='<unk>'))
+        tokenizer = Tokenizer(models.BPE(unk_token="<unk>"))
         tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
         tokenizer.decoder = decoders.ByteLevel()
-        tokenizer.train_from_iterator([raw[:cut]], trainers.BpeTrainer(
-            vocab_size=a.vocab_size, special_tokens=['<pad>', '<unk>', '<bos>', '<eos>']))
-    # Split raw text before tokenization to keep the validation suffix separate.
-    train_ids = torch.tensor(tokenizer.encode(raw[:cut]).ids)
-    valid_ids = torch.tensor(tokenizer.encode(raw[cut:]).ids)
+        documents = hf_documents(args) if args.hf_dataset else corpus_documents(args.corpus)
+        tokenizer.train_from_iterator(itertools.islice(documents, args.tokenizer_samples), trainers.BpeTrainer(
+            vocab_size=args.vocab_size, special_tokens=SPECIAL))
+    tokenizer.save(str(tokenizer_path))
+    manifest = build_chunks(args, out, tokenizer)
+
     config = dict(vocab_size=tokenizer.get_vocab_size(), **architecture)
-    saved = torch.load(checkpoint, map_location='cpu', weights_only=False) if a.resume else None
+    saved = torch.load(checkpoint, map_location="cpu", weights_only=False) if args.resume else None
     if saved:
-        config = saved['config']
-        if config != dict(vocab_size=tokenizer.get_vocab_size(), **architecture):
-            raise SystemExit('Use the original architecture values when resuming.')
-    if min(len(train_ids), len(valid_ids)) <= config['block_size']:
-        raise SystemExit('Corpus too small for separate training and validation blocks.')
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    bf16 = device.type == 'cuda' and torch.cuda.is_bf16_supported()
+        if saved["config"] != config:
+            raise SystemExit("Use the original architecture and tokenizer when resuming.")
+        start = saved["step"]
+    else:
+        start = 0
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    bf16 = device.type == "cuda" and torch.cuda.is_bf16_supported()
     dtype = torch.bfloat16 if bf16 else torch.float16
     model = DistanceAlpha(**config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-    scaler = torch.amp.GradScaler('cuda', enabled=device.type == 'cuda' and not bf16)
-    start = 0
+    scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda" and not bf16)
     if saved:
-        model.load_state_dict(saved['model']); optimizer.load_state_dict(saved['optimizer'])
-        scaler.load_state_dict(saved['scaler']); start = saved['step']
-    tokenizer.save(str(out/'tokenizer.json'))
-    actual_parameters = sum(x.numel() for x in model.parameters())
+        model.load_state_dict(saved["model"]); optimizer.load_state_dict(saved["optimizer"])
+        scaler.load_state_dict(saved["scaler"])
+    actual_parameters = sum(item.numel() for item in model.parameters())
     assert actual_parameters == parameter_count(config)
-    print(json.dumps(dict(parameters=actual_parameters, preset=a.preset,
-                          train_tokens=len(train_ids), validation_tokens=len(valid_ids), device=str(device))))
+    print(json.dumps({"parameters": actual_parameters, "preset": args.preset,
+                      "train_tokens": manifest["train_tokens"], "validation_tokens": manifest["validation_tokens"],
+                      "device": str(device), "chunk_tokens": args.chunk_tokens}))
+    train = DiskBlockSampler(out / "token-chunks" / "train", config["block_size"], args.cache_chunks, 42)
+    validation = DiskBlockSampler(out / "token-chunks" / "validation", config["block_size"], args.cache_chunks, 123)
 
-    def batch(ids):
-        starts = torch.randint(len(ids)-config['block_size'], (a.batch_size,))
-        b = torch.stack([ids[i:i+config['block_size']+1] for i in starts]).to(device)
-        return b[:, :-1], b[:, 1:]
-
-    for step in range(start+1, start+a.steps+1):
+    for step in range(start + 1, start + args.steps + 1):
         model.train(); optimizer.zero_grad(set_to_none=True)
-        x, y = batch(train_ids)
-        with torch.autocast(device.type, dtype=dtype, enabled=device.type == 'cuda'):
+        x, y = train.batch(args.batch_size, device)
+        with torch.autocast(device.type, dtype=dtype, enabled=device.type == "cuda"):
             logits, auxiliary, effective = model(x)
             ce = F.cross_entropy(logits.flatten(0, 1), y.flatten())
             loss = ce + .001 * auxiliary
@@ -141,22 +219,21 @@ def main():
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
         scaler.step(optimizer); scaler.update()
         if step % 10 == 0:
-            print(f'step={step} loss={ce.item():.4f} effective_matches={effective.item():.2f}', flush=True)
-        if step % a.save_every == 0 or step == start+a.steps:
+            print(f"step={step} loss={ce.item():.4f} effective_matches={effective.item():.2f}", flush=True)
+        if step % args.save_every == 0 or step == start + args.steps:
             model.eval()
-            with torch.no_grad(), torch.random.fork_rng():
-                torch.manual_seed(123)
-                x, y = batch(valid_ids)
-                with torch.autocast(device.type, dtype=dtype, enabled=device.type == 'cuda'):
+            with torch.inference_mode():
+                x, y = validation.batch(args.batch_size, device)
+                with torch.autocast(device.type, dtype=dtype, enabled=device.type == "cuda"):
                     logits, _, _ = model(x)
                     val = F.cross_entropy(logits.flatten(0, 1), y.flatten()).item()
-            temp = out/'latest.tmp'
-            torch.save(dict(model=model.state_dict(), optimizer=optimizer.state_dict(),
-                            scaler=scaler.state_dict(), config=config, step=step,
-                            validation_loss=val), temp)
-            os.replace(temp, checkpoint)
-            print(f'step={step} sampled_validation_loss={val:.4f} checkpoint={checkpoint}', flush=True)
+            temporary = out / "latest.tmp"
+            torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                        "scaler": scaler.state_dict(), "config": config, "step": step,
+                        "validation_loss": val}, temporary)
+            os.replace(temporary, checkpoint)
+            print(f"step={step} sampled_validation_loss={val:.4f} checkpoint={checkpoint}", flush=True)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

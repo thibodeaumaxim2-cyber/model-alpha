@@ -65,9 +65,11 @@ tokens, 2,048 context tokens, 2,048 dimensions, 18 causal layers, 16 heads, and
 the 4,096-entry distance memory. It cannot resume a small-model checkpoint.
 The trainer prints the actual parameter count before its first optimizer update.
 
-The following streams 200,000 UltraChat conversations from Hugging Face into
-`checkpoints/alpha-distance-1b/hf-corpus.txt`, trains a tokenizer on the first
-95%, and saves the tokenizer and checkpoints in that same output directory:
+The following streams 200,000 UltraChat conversations from Hugging Face, trains a
+tokenizer from the first 10,000 documents, and materializes the token stream into
+one-million-token `.pt` chunks on disk. Only a small configurable chunk cache stays
+in RAM while training. The tokenizer, chunks, and checkpoints share the output
+directory:
 
 ```bash
 python train_distance_alpha.py \
@@ -75,13 +77,17 @@ python train_distance_alpha.py \
   --hf-dataset HuggingFaceH4/ultrachat_200k \
   --hf-split train_sft \
   --hf-samples 200000 \
+  --tokenizer-samples 10000 \
+  --chunk-tokens 1000000 \
+  --cache-chunks 4 \
   --steps 1000 \
   --batch-size 1 \
   --output checkpoints/alpha-distance-1b
 ```
 
 Use `--resume` with exactly the same preset and architecture values to continue.
-The local corpus file is retained so re-runs do not redownload the selected text.
+The token chunks are retained so resumed runs do not redownload or retokenize the
+selected text.
 This single-process trainer is an experiment harness. Training a 1B model needs
 substantially more than a few hundred thousand conversations and usually needs
 high-memory or multi-GPU hardware; it will not fit a 6GB GPU.
