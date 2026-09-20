@@ -7,6 +7,8 @@ import math
 import os
 from pathlib import Path
 import random
+import shutil
+import tempfile
 
 import torch
 from datasets import load_dataset
@@ -67,6 +69,24 @@ def save_chunk(directory, number, token_ids):
     temp = path.with_suffix(".tmp")
     torch.save(torch.tensor(token_ids, dtype=torch.int32), temp)
     os.replace(temp, path)
+
+
+def save_checkpoint(checkpoint, payload):
+    """Stage locally before copying to network/FUSE storage such as Google Drive."""
+    with tempfile.NamedTemporaryFile(prefix="alpha-checkpoint-", suffix=".pt", delete=False) as handle:
+        local_path = Path(handle.name)
+    try:
+        torch.save(payload, local_path)
+        expected_size = local_path.stat().st_size
+        if not expected_size:
+            raise RuntimeError("Local checkpoint save produced an empty file")
+        temporary = checkpoint.with_suffix(".part")
+        shutil.copyfile(local_path, temporary)
+        if temporary.stat().st_size != expected_size:
+            raise RuntimeError("Checkpoint copy to destination has the wrong size")
+        os.replace(temporary, checkpoint)
+    finally:
+        local_path.unlink(missing_ok=True)
 
 
 def build_chunks(args, out, tokenizer):
@@ -248,11 +268,9 @@ def main():
                 with torch.autocast(device.type, dtype=dtype, enabled=device.type == "cuda"):
                     logits, _, _ = model(x)
                     val = F.cross_entropy(logits.flatten(0, 1), y.flatten()).item()
-            temporary = out / "latest.tmp"
-            torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
-                        "scaler": scaler.state_dict(), "config": config, "step": step,
-                        "validation_loss": val, "training_config": vars(args)}, temporary)
-            os.replace(temporary, checkpoint)
+            save_checkpoint(checkpoint, {"model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                                         "scaler": scaler.state_dict(), "config": config, "step": step,
+                                         "validation_loss": val, "training_config": vars(args)})
             print(f"step={step} sampled_validation_loss={val:.4f} checkpoint={checkpoint}", flush=True)
 
 
