@@ -98,3 +98,7 @@ initial loss such as 100 indicates an unsuitable checkpoint or a broken run. The
 default memory objective scale is .05, which pushes effective memory matches toward
 eight. Check the `effective_matches` log: around 8 is the intended behavior, while
 near 1 means one entry dominates and near 4,096 means retrieval is uniform.
+
+The trainer uses a linear learning-rate warmup followed by cosine decay. The 1B
+defaults are `--learning-rate 1e-4 --warmup-steps 1000 --schedule-steps 100000
+--min-lr-ratio .1`. `schedule-steps` counts optimizer updates across resume runs.

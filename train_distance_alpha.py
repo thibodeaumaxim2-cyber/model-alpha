@@ -3,6 +3,7 @@ import argparse
 from collections import OrderedDict
 import itertools
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -147,6 +148,11 @@ def main():
         parser.add_argument("--" + name.replace("_", "-"), type=int)
     parser.add_argument("--vocab-size", type=int, default=32000)
     parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--warmup-steps", type=int, default=1000)
+    parser.add_argument("--schedule-steps", type=int, default=100_000,
+                        help="Total optimizer steps for cosine decay, including resumed steps.")
+    parser.add_argument("--min-lr-ratio", type=float, default=.1)
     parser.add_argument("--chunk-tokens", type=int, default=1_000_000)
     parser.add_argument("--cache-chunks", type=int, default=4)
     parser.add_argument("--memory-loss-scale", type=float, default=.05,
@@ -162,6 +168,8 @@ def main():
         parser.error("Numeric arguments must be positive")
     if args.memory_loss_scale < 0:
         parser.error("--memory-loss-scale must be non-negative")
+    if args.learning_rate <= 0 or args.warmup_steps < 0 or args.schedule_steps < 1 or not 0 <= args.min_lr_ratio <= 1:
+        parser.error("Invalid learning-rate schedule arguments")
     if args.hf_dataset and args.hf_samples < 1:
         parser.error("--hf-samples must be positive")
     if architecture["dim"] % architecture["heads"]:
@@ -199,7 +207,7 @@ def main():
     bf16 = device.type == "cuda" and torch.cuda.is_bf16_supported()
     dtype = torch.bfloat16 if bf16 else torch.float16
     model = DistanceAlpha(**config).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda" and not bf16)
     if saved:
         model.load_state_dict(saved["model"]); optimizer.load_state_dict(saved["optimizer"])
@@ -212,8 +220,17 @@ def main():
     train = DiskBlockSampler(out / "token-chunks" / "train", config["block_size"], args.cache_chunks, 42)
     validation = DiskBlockSampler(out / "token-chunks" / "validation", config["block_size"], args.cache_chunks, 123)
 
+    def scheduled_lr(step):
+        if step <= args.warmup_steps:
+            return args.learning_rate * step / max(1, args.warmup_steps)
+        progress = min(1., (step - args.warmup_steps) / max(1, args.schedule_steps - args.warmup_steps))
+        cosine = .5 * (1 + math.cos(math.pi * progress))
+        return args.learning_rate * (args.min_lr_ratio + (1 - args.min_lr_ratio) * cosine)
+
     for step in range(start + 1, start + args.steps + 1):
         model.train(); optimizer.zero_grad(set_to_none=True)
+        for group in optimizer.param_groups:
+            group["lr"] = scheduled_lr(step)
         x, y = train.batch(args.batch_size, device)
         with torch.autocast(device.type, dtype=dtype, enabled=device.type == "cuda"):
             logits, auxiliary, effective = model(x)
@@ -223,7 +240,7 @@ def main():
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
         scaler.step(optimizer); scaler.update()
         if step % 10 == 0:
-            print(f"step={step} loss={ce.item():.4f} memory_auxiliary={auxiliary.item():.4f} effective_matches={effective.item():.2f}", flush=True)
+            print(f"step={step} loss={ce.item():.4f} lr={scheduled_lr(step):.2e} memory_auxiliary={auxiliary.item():.4f} effective_matches={effective.item():.2f}", flush=True)
         if step % args.save_every == 0 or step == start + args.steps:
             model.eval()
             with torch.inference_mode():
@@ -234,7 +251,7 @@ def main():
             temporary = out / "latest.tmp"
             torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
                         "scaler": scaler.state_dict(), "config": config, "step": step,
-                        "validation_loss": val}, temporary)
+                        "validation_loss": val, "training_config": vars(args)}, temporary)
             os.replace(temporary, checkpoint)
             print(f"step={step} sampled_validation_loss={val:.4f} checkpoint={checkpoint}", flush=True)
 
