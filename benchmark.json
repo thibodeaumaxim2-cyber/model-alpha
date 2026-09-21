@@ -1,0 +1,13 @@
+{
+  "checkpoint": "latest.pt",
+  "checkpoint_step": 22780,
+  "device": "cpu",
+  "parameters": 9500674,
+  "validation_tokens": 630784,
+  "validation_blocks": 2464,
+  "cross_entropy_loss": 6.311584328676199,
+  "perplexity": 550.9170914955419,
+  "mean_effective_memory_matches": 1.0019294772926088,
+  "tokens_per_second": 13163.359749644133,
+  "elapsed_seconds": 47.91968099307269
+}

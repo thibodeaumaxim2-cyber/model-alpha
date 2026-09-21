@@ -1,30 +1,30 @@
 {
   "suite": "alpha_base_v1.jsonl",
-  "checkpoint": "alpha-base-v1",
-  "created_at": "2026-09-16T06:45:20.708495+00:00",
-  "training_step": 58365,
+  "checkpoint": "step-0003300.pt",
+  "created_at": "2026-09-20T00:52:27.527965+00:00",
+  "training_step": 3300,
   "categories": {
     "language": {
-      "mean_nll": 4.5259677569071455,
-      "perplexity": 92.38528908235848,
+      "mean_nll": 4.4410654703776045,
+      "perplexity": 84.86531499944577,
       "exact_completion_rate": 0.0,
       "examples": 3
     },
     "knowledge": {
-      "mean_nll": 4.557856039868461,
-      "perplexity": 95.37877218100859,
+      "mean_nll": 5.665662864844005,
+      "perplexity": 288.7793393590187,
       "exact_completion_rate": 0.0,
       "examples": 3
     },
     "code": {
-      "mean_nll": 3.8018081320656676,
-      "perplexity": 44.78208325413778,
-      "exact_completion_rate": 0.0,
+      "mean_nll": 2.2847621540228524,
+      "perplexity": 9.823349501977255,
+      "exact_completion_rate": 0.3333333333333333,
       "examples": 3
     },
     "conversation": {
-      "mean_nll": 3.351058150279439,
-      "perplexity": 28.532909781966104,
+      "mean_nll": 2.338563415739271,
+      "perplexity": 10.366333748815881,
       "exact_completion_rate": 0.0,
       "examples": 3
     }
